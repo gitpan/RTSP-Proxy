@@ -1,5 +1,7 @@
 package RTSP::Proxy::Session;
 
+our $VERSION = '0.02';
+
 use Moose;
 
 use RTSP::Client '0.03';

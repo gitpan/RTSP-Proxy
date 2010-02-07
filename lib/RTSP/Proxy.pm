@@ -6,7 +6,7 @@ extends 'Net::Server::PreFork';
 use RTSP::Proxy::Session;
 use Carp qw/croak/;
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 =head1 NAME
 
@@ -242,7 +242,7 @@ sub options {
     $template->{rtsp_client} = \ $prop->{rtsp_client};
 }
 
-__PACKAGE__->meta->make_immutable;
+1;
 
 __END__
 
