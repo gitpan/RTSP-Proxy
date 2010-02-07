@@ -6,7 +6,7 @@ extends 'Net::Server::PreFork';
 use RTSP::Proxy::Session;
 use Carp qw/croak/;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 =head1 NAME
 
@@ -31,8 +31,11 @@ RTSP::Proxy - Simple RTSP proxy server
 =head1 DESCRIPTION
 
 This module is a simple RTSP proxy based on L<Net::Server> and L<RTSP::Client>.
+
 When a client connects and sends commands to the server, it will pass them through the RTSP client and return the results back.
+
 This has only been tested with VLC and Axis IP cameras, it may not work with your setup. Patches and feedback welcome.
+
 Note: you will need to be root to bind to port 554, you may drop privs if you wish. See the configuration options in L<Net::Server> for more details.
 
 =head2 EXPORT
@@ -256,11 +259,14 @@ Mischa Spiegelmock, E<lt>revmischa@cpan.orgE<gt>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2010 by Bobo
+Copyright (C) 2010 by Mischa Spiegelmock
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself, either Perl version 5.10.0 or,
 at your option, any later version of Perl 5 you may have available.
 
+=head1 GUINEAS
+
+SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS 8DDDDDDDDDDDDDDDDDDDDDDDD horseBERD
 
 =cut
