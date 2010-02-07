@@ -1,0 +1,7 @@
+lib/RTSP/Proxy.pm
+lib/RTSP/Proxy/Session.pm
+Makefile.PL
+MANIFEST
+README
+t/RTSP-Proxy.t
+META.yml                                 Module meta-data (added by MakeMaker)
