@@ -6,7 +6,7 @@ extends 'Net::Server::PreFork';
 use RTSP::Proxy::Session;
 use Carp qw/croak/;
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 =head1 NAME
 
@@ -144,13 +144,15 @@ sub proxy_request {
     # pass through some headers
     foreach my $header_name (qw/
         Accept Bandwidth Accept-Language ClientChallenge PlayerStarttime RegionData
-        GUID ClientID Transport Session x-retransmit x-dynamic-rate x-transport-options
-        /) {
+        GUID ClientID Transport x-retransmit x-dynamic-rate x-transport-options Session
+        Range/) {
             
         my $header_value = $headers->{$header_name};
         next unless defined $header_value;
         $self->chomp_line(\$header_value);
-        $client->add_req_header($header_name, $header_value);
+        $client->add_req_header($header_name, $header_value)
+            unless $client->get_req_header($header_name) &&
+            $client->get_req_header($header_name) eq $header_value;
     }
     
     # do request
@@ -188,7 +190,7 @@ sub proxy_request {
     # pass some headers back    
     foreach my $header_name (qw/
         Content-Type Content-Base Public Allow Transport Session
-        /) {
+        Rtp-Info Range/) {
         my $header_values = $client->get_header($header_name);
         next unless defined $header_values;
         foreach my $val (@$header_values) {
