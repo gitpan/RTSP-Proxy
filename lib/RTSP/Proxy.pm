@@ -6,7 +6,7 @@ extends 'Net::Server::PreFork';
 use RTSP::Proxy::Session;
 use Carp qw/croak/;
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 =head1 NAME
 
@@ -79,7 +79,7 @@ sub process_request {
             goto DONE if $line eq "\r\n";
             
             # header
-            my ($header_name, $header_value) = $line =~ /^([-A-Za-z0-9]+)\s*:\s*(.*)\r\n/;
+            my ($header_name, $header_value) = $line =~ /^([-A-Za-z0-9]+)\s*:\s*(.*)$/;
             unless ($header_name) {
                 $self->log(1, "Invalid header: $line");
                 next;
@@ -148,7 +148,9 @@ sub proxy_request {
         /) {
             
         my $header_value = $headers->{$header_name};
-        $client->add_req_header($header_name, $header_value) if defined $header_value;
+        next unless defined $header_value;
+        $self->chomp_line(\$header_value);
+        $client->add_req_header($header_name, $header_value);
     }
     
     # do request
@@ -191,33 +193,48 @@ sub proxy_request {
         next unless defined $header_values;
         foreach my $val (@$header_values) {
             $self->log(4, "header: $header_name, value: '$val'");
+            $self->chomp_line(\$val);
             $res .= "$header_name: $val\r\n";
         }
     }
     
-    # respond with correct CSeq
-    $res .= "CSeq: $headers->{CSeq}\r\n" if $headers->{CSeq};
-    $res .= "Cseq: $headers->{Cseq}\r\n" if $headers->{Cseq};
-    $res .= "cseq: $headers->{cseq}\r\n" if $headers->{cseq};
-    
-    if ($body) {
-        $res .= "Content-Length: " . length($body) . "\r\n\r\n$body\r\n";
+    # respond with correct CSeq                                                                                                                                                     
+    my $cseq = $headers->{CSeq} || $headers->{Cseq} || $headers->{cseq};
+    if ($cseq) {
+        $self->chomp_line(\$cseq);
+        $res .= "cseq: $cseq\r\n";
     }
     
-    $self->write_line("$res");
+    $self->write($res, $body);
 }
 
-sub write_line {
-    my ($self, $line) = @_;
-    print STDOUT "$line\r\n";
-    $self->log(4, ">>$line");
+sub write {
+    my ($self, $headers_string, $body) = @_;
+
+    my $res = $headers_string;
+
+    if ($body) {
+        $self->chomp_line(\$body);
+        $res .= "Content-Length: " . length($body) . "\r\n\r\n$body";
+    } else {
+        $res .= "\r\n";
+    }
+
+    my $sock = $self->{server}->{client} or die "Could not find client socket";
+    $sock->write("$res");
+
+    $self->log(4, ">>$res\n");
 }
 
 sub return_status {
-    my ($self, $code, $msg, $body) = @_;
-    $body ||= '';
-    print STDOUT "$code $msg\r\n$body\r\n";
+    my ($self, $code, $msg) = @_;
+    print STDOUT "$code $msg\r\n";
     $self->log(3, "Returning status $code $msg");
+}
+
+sub chomp_line {
+    my ($self, $lineref) = @_;
+    $$lineref =~ s/([\r\n]+)$//sm;
 }
 
 sub default_values {
