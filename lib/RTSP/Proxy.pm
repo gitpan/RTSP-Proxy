@@ -6,7 +6,7 @@ extends 'Net::Server::PreFork';
 use RTSP::Proxy::Session;
 use Carp qw/croak/;
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 
 =head1 NAME
 
@@ -33,6 +33,8 @@ RTSP::Proxy - Simple RTSP proxy server
 This module is a simple RTSP proxy based on L<Net::Server> and L<RTSP::Client>.
 
 When a client connects and sends commands to the server, it will pass them through the RTSP client and return the results back.
+
+This module will also automatically proxy the media transport protocol as well. Currently it only proxies RTP over UDP, but support for other transports may be added if requested.
 
 This has only been tested with VLC and Axis IP cameras, it may not work with your setup. Patches and feedback welcome.
 
@@ -62,7 +64,7 @@ sub process_request {
     my $headers = {};
     
     READ: while (my $line = <STDIN>) {
-        $self->log(4, "got line: $line");
+        $self->log(5, "got line: $line");
         
         unless ($method) {
             # first line should be method
@@ -93,17 +95,33 @@ sub process_request {
         last unless $method && $proto;
     
         $method = uc $method;
+        
     
         # get/create session
         my $session;
         if ($self->{server}{session}) {
             $session = $self->{server}{session};
         } else {
-            # replace our port/address with the client's requested port/address
             my $client_settings = $self->{server}{rtsp_client} or die "Could not find client configuration";
         
-            # no session id was sent, create one
-            $session = RTSP::Proxy::Session->new(client_opts => $client_settings, media_uri => $uri);
+            my $transport_handler_class = $self->{server}{transport_handler_class};
+            croak "build_transport_handler() called without transport_handler_class being defined"
+                unless $transport_handler_class;
+
+            # get client address
+            my $sock = $self->{server}{client};
+            my $client_address = $sock->peerhost;
+
+            # create RTSP session object
+            $self->log(3, "creating session");
+            $session = RTSP::Proxy::Session->new(
+                client_address => $client_address,
+                rtsp_client_opts => $client_settings,
+                media_uri => $uri,
+                transport_handler_class => $transport_handler_class,
+            );
+            
+            # save session
             $self->{server}{session} = $session;
         }
     
@@ -111,12 +129,51 @@ sub process_request {
             $session->rtsp_client->reset;
         }
         
+        # parse out setup info
+        my ($client_port_start, $client_port_end);
+        if ($method eq 'SETUP') {
+            # parse out the client requested ports
+            my $transport = $headers->{Transport} || $headers->{transport} || '';
+            $self->log(4, "transport: '$transport'");
+            ($client_port_start, $client_port_end) = $transport =~ /client_port=(\d+)(?:-(\d+))?/i;
+            
+            # rewrite the client port range
+            if ($client_port_start) {
+                $client_port_end ||= $client_port_start;
+                
+                # totally broken!
+                my $proxy_port_start = "6970";
+                my $proxy_port_end   = "6971";
+                
+                # lol!
+                my $port_range = "${proxy_port_start}-$proxy_port_end";
+                $transport =~ s/client_port=((?:\d+)(?:-(?:\d+)))?/client_port=$port_range/ims;
+                $self->log(3, "rewriting transport request: $transport");
+                
+                # replace transport header with our transport specification
+                delete $headers->{Transport};
+                delete $headers->{transport};
+                $headers->{Transport} = $transport;
+                
+                $self->log(3, "setting session client port $client_port_start");
+                $session->client_port_start($client_port_start);
+                $session->client_port_end($client_port_end);
+                
+                # now ready to run server to proxy media transport
+                $session->run_transport_handler_server;
+            }
+        }
+                
         $self->proxy_request($method, $uri, $session, $headers);
     
         # so we can reuse the client for more requests
         if ($method eq 'SETUP' || $method eq 'DESCRIBE' || $method eq 'TEARDOWN') {
             $self->log(4, "resetting rtsp client");
             $session->rtsp_client->reset;
+        }
+        
+        if ($method eq 'TEARDOWN') {
+            delete $self->{server}{session};
         }
     
         $method = '';
@@ -190,12 +247,16 @@ sub proxy_request {
     # pass some headers back    
     foreach my $header_name (qw/
         Content-Type Content-Base Public Allow Transport Session
-        Rtp-Info Range/) {
+        Rtp-Info Range transport/) {
         my $header_values = $client->get_header($header_name);
         next unless defined $header_values;
         foreach my $val (@$header_values) {
             $self->log(4, "header: $header_name, value: '$val'");
             $self->chomp_line(\$val);
+            
+            $self->rewrite_transport_response($session, \$val)
+                if lc $header_name eq 'transport';
+            
             $res .= "$header_name: $val\r\n";
         }
     }
@@ -228,6 +289,36 @@ sub write {
     $self->log(4, ">>$res\n");
 }
 
+sub rewrite_transport_response {
+    my ($self, $session, $respref) = @_;
+    return unless $respref && $$respref;
+    
+    $self->log(3, "transport response: $$respref");
+    
+    my $client_port_start = $session->client_port_start;
+    my $client_port_end   = $session->client_port_end;
+    
+    return unless $client_port_start && $client_port_end;
+    
+    my $port_range = "${client_port_start}-$client_port_end";
+    $$respref =~ s/client_port=((?:\d+)(?:-(?:\d+)))?/client_port=$port_range/ims;
+    $self->log(3, "rewriting transport response: $$respref");
+}
+
+# clean up stuff!
+sub post_client_connection_hook {
+    my $self = shift;
+    
+    $self->log(3, "client connection closed");
+    
+    my $session = $self->{server}{session};
+    if ($session) {
+        delete $self->{server}{session};
+    }
+}
+
+#####
+
 sub return_status {
     my ($self, $code, $msg) = @_;
     print STDOUT "$code $msg\r\n";
@@ -255,13 +346,24 @@ sub options {
     ### setup options in the parent classes
     $self->SUPER::options($template);
     
+    
+    ### rtsp client args
     my $client = $prop->{rtsp_client}
         or croak "No rtsp_client definition specified";
     
     $template->{rtsp_client} = \ $prop->{rtsp_client};
+    
+    
+    ### transport class
+    my $tc = $prop->{'transport_handler_class'} || 'RTP';
+    $tc = "RTSP::Proxy::Transport::$tc";
+    eval "use $tc; 1;" or die $@;
+    
+    $prop->{'transport_handler_class'} = $tc;
+    $template->{'transport_handler_class'} = \ $prop->{'transport_handler_class'};
 }
 
-1;
+__PACKAGE__->meta->make_immutable(inline_constructor => 0);
 
 __END__
 
