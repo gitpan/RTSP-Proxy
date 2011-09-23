@@ -7,6 +7,7 @@ extends 'Net::Server::Single';
 use RTSP::Proxy::StreamBuffer;
 use IO::Socket::INET;
 use Carp qw/croak/;
+use Net::RTP::Packet;
 
 has stream_buffer => (
     is => 'rw',
@@ -30,6 +31,25 @@ has stream_buffer_size => (
     lazy => 1,
 );
 
+
+sub options {
+    my $self     = shift;
+    my $prop     = $self->{'server'};
+    my $template = shift;
+
+    ### setup options in the parent classes
+    $self->SUPER::options($template);
+    
+    my $decode_rtp = $prop->{decode_rtp} || 0;    
+    $prop->{decode_rtp} = $decode_rtp;
+    $template->{decode_rtp} = \ $prop->{decode_rtp};
+    
+    my $output_raw = $prop->{output_raw} || 0;    
+    $prop->{output_raw} = $output_raw;
+    $template->{output_raw} = \ $prop->{output_raw};
+}
+
+
 # config defaults
 sub default_values {
     return {
@@ -37,6 +57,7 @@ sub default_values {
         listen       => 1,
         port         => 6970,
         udp_recv_len => 4096,
+        no_client_stdout => 1,
     }
 }
 
@@ -65,6 +86,8 @@ sub build_client_socket {
         $self->log(3, "calling build_client_socket() with unknown client information");
         return;
     }
+    
+    $self->log(4, "buildling client socket to $peer_address:$peer_port");
     
     my $sock = IO::Socket::INET->new(
         PeerPort  => $peer_port,
@@ -112,6 +135,8 @@ sub handle_packet {
     $self->log(4, "forwarding packet to $client_addr");
     my $p = $self->get_packet or return;
     
+    $self->decode_packet(\$p) if $self->{server}{decode_rtp};
+    
     my $client_sock = $self->client_socket;
     if (! $client_sock) {
         $client_sock = $self->client_socket($self->build_client_socket);
@@ -120,6 +145,22 @@ sub handle_packet {
     
     $self->log(3, "writing " . (length $p) . " bytes to $client_addr");
     $client_sock->write($p);
+}
+
+sub decode_packet {
+    my ($self, $p) = @_;
+
+    my $rtp = new Net::RTP::Packet($$p);
+    return unless $rtp && $self->{server}{output_raw};
+    
+    $self->{buf} ||= '';
+    $self->{buf} .= $rtp->payload if $rtp->payload_size;
+        
+    if ($rtp->marker) {
+        local $|=1;
+        print $self->{buf};
+        $self->{buf} = '';
+    }
 }
 
 __PACKAGE__->meta->make_immutable(inline_constructor => 0);

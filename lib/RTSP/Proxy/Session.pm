@@ -25,6 +25,14 @@ has rtsp_client_opts => (
     lazy => 1,
 );
 
+# options passed to child media transport servers
+has transport_handler_opts => (
+    is => 'rw',
+    isa => 'HashRef',
+    default => sub { {} },
+    lazy => 1,
+);
+
 has media_uri => (
     is => 'rw',
     isa => 'Str',
@@ -62,11 +70,6 @@ has client_port_end => (
     is => 'rw',
 );
 
-# options passed to child media transport servers
-our %TRANSPORT_OPTS = (
-    log_level => 3,
-);
-
 ######
 
 sub DEMOLISH {
@@ -87,7 +90,7 @@ sub build_transport_handler {
     my $self = shift;
 
     my $transport_handler_class = $self->transport_handler_class;        
-    my $transport_handler = $transport_handler_class->new(%TRANSPORT_OPTS);
+    my $transport_handler = $transport_handler_class->new($self->transport_handler_opts);
     
     $transport_handler->session($self);
     
